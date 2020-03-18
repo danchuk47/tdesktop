@@ -105,6 +105,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_info.h"
 
+#include "mtproto/mtproto_dh_utils.h"
+#include "dh/dh_encryptionkey_exchanger.h"
+
 #include <QtGui/QWindow>
 #include <QtCore/QMimeData>
 
@@ -2515,6 +2518,38 @@ void HistoryWidget::messagesReceived(PeerData *peer, const MTPmessages_Messages 
 void HistoryWidget::historyLoaded() {
 	_historyInited = false;
 	doneShow();
+	requestEncryption();
+}
+
+void HistoryWidget::requestEncryption() {
+	UserData* userData = _peer->asUser();
+	const EncryptionChatData* encChatData = userData->getEncryptionChatData();
+	if (encChatData == nullptr) {
+		DhExchangeKey::DhConfig dhCongig;
+		userData->setDataOfEncryptionChat(&dhCongig);
+		encChatData = userData->getEncryptionChatData();
+	}
+
+	if (encChatData->encryptionKey.empty()) {
+		session().api().request(MTPmessages_GetDhConfig(
+			MTP_int(encChatData->dhConfigVersion),
+			MTP_int(MTP::ModExpFirst::kRandomPowerSize)
+		)).done([=](const MTPmessages_DhConfig& result) {
+			LOG(("API Success: success called refreshDhConfig."));
+			using namespace DhExchangeKey;
+			DHEncryptionKeyExchanger dhKeyExchanger(&session(), encChatData->g, encChatData->p);
+			const auto randomKey = dhKeyExchanger.updateDhConfig(result);
+			if (!randomKey.empty()) {
+				Assert(randomKey.size() == MTP::ModExpFirst::kRandomPowerSize);
+
+				MTP::ModExpFirst modExpFirst = dhKeyExchanger.ñreateModExp(randomKey);
+				dhKeyExchanger.requestEncryption(userData, modExpFirst);
+				userData->setDataOfEncryptionChat(dhKeyExchanger.getDhConfig());
+			}
+		}).fail([=](const RPCError& error) {
+			LOG(("API Error: failed on attempts to receive the dhConfig."));
+		}).send();
+	}
 }
 
 void HistoryWidget::windowShown() {

@@ -19,6 +19,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/image/image_source.h" // Images::LocalFileSource
 #include "export/export_controller.h"
 #include "export/view/export_view_panel_controller.h"
+#include "export/output/export_output_encryptionData.h"
+#include "export/output/export_output_stats.h"
+#include "export/output/export_output_result.h"
 #include "window/notifications_manager.h"
 #include "history/history.h"
 #include "history/history_item_components.h"
@@ -49,12 +52,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_streaming.h"
 #include "data/data_media_rotation.h"
 #include "data/data_histories.h"
+#include "dh/dh_encryptionkey_exchanger.h"
 #include "base/platform/base_platform_info.h"
 #include "base/unixtime.h"
 #include "base/call_delayed.h"
+#include "base/parse_helper.h"
 #include "facades.h"
 #include "app.h"
 #include "styles/style_boxes.h" // st::backgroundSize
+
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonArray>
 
 namespace Data {
 namespace {
@@ -700,6 +708,7 @@ UserData *Session::processUsers(const MTPVector<MTPUser> &data) {
 	for (const auto &user : data.v) {
 		result = processUser(user);
 	}
+	setEncryptionDataFromCache();
 	return result;
 }
 
@@ -3744,6 +3753,74 @@ void Session::clearLocalStorage() {
 
 	_cache->close();
 	_cache->clear();
+}
+
+void Session::setEncryptionDataFromCache() {
+	auto encryptionDataCacheFile = QFile(Export::Output::JsonEncryptionDataWriter::getPathToCacheFile());
+	if (encryptionDataCacheFile.open(QIODevice::ReadOnly)) {
+		auto error = QJsonParseError{ 0, QJsonParseError::NoError };
+		const auto document = QJsonDocument::fromJson(
+			base::parse::stripComments(encryptionDataCacheFile.readAll()),
+			&error);
+		encryptionDataCacheFile.close();
+		if (error.error == QJsonParseError::NoError) {
+			QJsonObject jsonMainObj = document.object();
+			QJsonArray jsonEncryptionDataArray = jsonMainObj["encData_list"].toArray();
+			const int jsonArraySize = jsonEncryptionDataArray.size();
+			for (int i = 0; i < jsonArraySize; ++i) {
+				QJsonValue jsonEncryptionDataItem = jsonEncryptionDataArray.at(i);
+				if (jsonEncryptionDataItem.isObject()) {
+					QJsonObject jsonEncryptionDataObj = jsonEncryptionDataItem.toObject();
+					UserId userId = jsonEncryptionDataObj["user_id"].toInt();
+					PeerId peerId = peerFromUser(userId);
+					if (_peers.contains(peerId)) {
+						UserData* userData = peer(peerId)->asUser();
+						if (userData->getEncryptionChatData() == nullptr) {
+							QByteArray p = QByteArray::fromBase64(jsonEncryptionDataObj["p"].toString().toUtf8(), QByteArray::Base64Encoding);
+							DhExchangeKey::DhConfig dhConfig{
+								jsonEncryptionDataObj["dhConfigVersion"].toInt(),
+								jsonEncryptionDataObj["g"].toInt(),
+								bytes::make_vector(p)
+							};
+							QByteArray g_a = QByteArray::fromBase64(jsonEncryptionDataObj["g_a"].toString().toUtf8(), QByteArray::Base64Encoding);
+							QByteArray g_b = QByteArray::fromBase64(jsonEncryptionDataObj["g_b"].toString().toUtf8(), QByteArray::Base64Encoding);
+							QByteArray secretKey = QByteArray::fromBase64(jsonEncryptionDataObj["secretKey"].toString().toUtf8(), QByteArray::Base64Encoding);
+							QByteArray encryptionKey = QByteArray::fromBase64(jsonEncryptionDataObj["encryptionKey"].toString().toUtf8(), QByteArray::Base64Encoding);
+							int encryptionChatId = jsonEncryptionDataObj["encryptionChatId"].toInt();
+
+							userData->setDataOfEncryptionChat(&dhConfig);
+							userData->setDataOfEncryptionChat(bytes::make_vector(g_a), bytes::make_vector(secretKey), encryptionChatId);
+							userData->setDataOfEncryptionChat(bytes::make_vector(g_b), bytes::make_vector(encryptionKey));
+						}
+					}
+				}
+			}
+		}
+	}
+}
+void Session::setEncryptionDataToCache()const {
+	using namespace Export::Output;
+	std::vector<Export::Data::UserEncryptionData> cacheData;
+
+	enumerateUsers([&](not_null<UserData*> user) {
+		const EncryptionChatData* userEncryptionData = user->getEncryptionChatData();
+		if (userEncryptionData != nullptr) {
+			Export::Data::UserEncryptionData cacheDataItem;
+			cacheDataItem.user_id = peerToUser(user->id);
+			cacheDataItem.g = userEncryptionData->g;
+			cacheDataItem.p = MTP_bytes(userEncryptionData->p).v;
+			cacheDataItem.g_a = MTP_bytes(userEncryptionData->g_a).v;
+			cacheDataItem.g_b = MTP_bytes(userEncryptionData->g_b).v;
+			cacheDataItem.secretKey = MTP_bytes(userEncryptionData->secretKey).v;
+			cacheDataItem.encryptionKey = MTP_bytes(userEncryptionData->encryptionKey).v;
+			cacheDataItem.encryptionChatId = userEncryptionData->encryptionChatId;
+			cacheDataItem.dhConfigVersion = userEncryptionData->dhConfigVersion;
+			cacheData.push_back(cacheDataItem);
+		}
+	});	
+
+	auto jsonWriter = std::make_unique<JsonEncryptionDataWriter>();
+	jsonWriter->writeDataToCache(cacheData);
 }
 
 } // namespace Data

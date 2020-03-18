@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/sender.h"
 #include "calls/calls_call.h"
+#include "dh/dh_encryptionkey_exchanger.h"
 
 namespace Media {
 namespace Audio {
@@ -52,8 +53,8 @@ private:
 	not_null<Call::Delegate*> getCallDelegate() {
 		return static_cast<Call::Delegate*>(this);
 	}
-	DhConfig getDhConfig() const override {
-		return _dhConfig;
+	DhExchangeKey::DhConfig getDhConfig() const override {
+		return *_dhConfigUpdater.getDhConfig();
 	}
 	void callFinished(not_null<Call*> call) override;
 	void callFailed(not_null<Call*> call) override;
@@ -67,15 +68,13 @@ private:
 
 	void refreshDhConfig();
 	void refreshServerConfig();
-	bytes::const_span updateDhConfig(const MTPmessages_DhConfig &data);
 
 	bool alreadyInCall();
 	void handleCallUpdate(const MTPPhoneCall &call);
 
 	const not_null<Main::Session*> _session;
 	MTP::Sender _api;
-
-	DhConfig _dhConfig;
+	DhExchangeKey::DHEncryptionKeyExchanger _dhConfigUpdater;
 
 	crl::time _lastServerConfigUpdateTime = 0;
 	mtpRequestId _serverConfigRequestId = 0;

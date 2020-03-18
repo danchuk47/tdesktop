@@ -364,6 +364,9 @@ protected:
 	std::unique_ptr<Data::Media> _media;
 
 private:
+	static MTPMessage decryptMessage(not_null<History*> history, const MTPMessage& message);
+
+private:
 	TimeId _date = 0;
 
 	HistoryView::Element *_mainView = nullptr;

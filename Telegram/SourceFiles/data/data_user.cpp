@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "observer_peer.h"
 #include "storage/localstorage.h"
 #include "data/data_session.h"
+#include "dh/dh_encryptionkey_exchanger.h"
 #include "ui/text_options.h"
 #include "apiwrap.h"
 #include "lang/lang_keys.h"
@@ -102,6 +103,35 @@ void UserData::setCommonChatsCount(int count) {
 		Notify::peerUpdatedDelayed(this, UpdateFlag::UserCommonChatsChanged);
 	}
 }
+
+void UserData::setDataOfEncryptionChat(bytes::vector&& g_a, bytes::vector&& secretKey, int32 encryptionChatId) {
+	if (_encryptionChatData == nullptr)
+	{
+		_encryptionChatData.reset(new EncryptionChatData());
+	}
+	_encryptionChatData->g_a = g_a;
+	_encryptionChatData->secretKey = std::move(secretKey);
+	_encryptionChatData->encryptionChatId = encryptionChatId;
+};
+
+void UserData::setDataOfEncryptionChat(const DhExchangeKey::DhConfig* dhConfig) {
+	if (_encryptionChatData == nullptr)
+	{
+		_encryptionChatData.reset(new EncryptionChatData());
+	}
+	_encryptionChatData->g = dhConfig->g;
+	_encryptionChatData->p = dhConfig->p;
+	_encryptionChatData->dhConfigVersion = dhConfig->version;
+};
+
+void UserData::setDataOfEncryptionChat(bytes::vector&& g_b, bytes::vector&& encryptionKey) {
+	if (_encryptionChatData == nullptr)
+	{
+		_encryptionChatData.reset(new EncryptionChatData());
+	}
+	_encryptionChatData->g_b = std::move(g_b);
+	_encryptionChatData->encryptionKey = std::move(encryptionKey);
+};
 
 void UserData::setName(const QString &newFirstName, const QString &newLastName, const QString &newPhoneName, const QString &newUsername) {
 	bool changeName = !newFirstName.isEmpty() || !newLastName.isEmpty();

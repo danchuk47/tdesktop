@@ -9,23 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/output/export_output_abstract.h"
 #include "export/output/export_output_file.h"
+#include "export/output/export_output_jsonDetails.h"
 #include "export/export_settings.h"
 #include "export/data/export_data_types.h"
 
 namespace Export {
 namespace Output {
-namespace details {
-
-struct JsonContext {
-	using Type = bool;
-	static constexpr auto kObject = Type(true);
-	static constexpr auto kArray = Type(false);
-
-	// Always fun to use std::vector<bool>.
-	std::vector<Type> nesting;
-};
-
-} // namespace details
 
 class JsonWriter : public AbstractWriter {
 public:
@@ -61,17 +50,11 @@ public:
 	QString mainFilePath() override;
 
 private:
-	using Context = details::JsonContext;
 	enum class DialogsMode {
 		None,
 		Chats,
 		Left,
 	};
-
-	[[nodiscard]] QByteArray pushNesting(Context::Type type);
-	[[nodiscard]] QByteArray prepareObjectItemStart(const QByteArray &key);
-	[[nodiscard]] QByteArray prepareArrayItemStart();
-	[[nodiscard]] QByteArray popNesting();
 
 	[[nodiscard]] QString mainFileRelativePath() const;
 	[[nodiscard]] QString pathWithRelativePath(const QString &path) const;
@@ -94,8 +77,7 @@ private:
 	Environment _environment;
 	Stats *_stats = nullptr;
 
-	Context _context;
-	bool _currentNestingHadItem = false;
+	JsonDataBuilder _dataBuilder;
 	DialogsMode _dialogsMode = DialogsMode::None;
 
 	std::unique_ptr<File> _output;

@@ -34,7 +34,8 @@ constexpr auto kServerConfigUpdateTimeoutMs = 24 * 3600 * crl::time(1000);
 
 Instance::Instance(not_null<Main::Session*> session)
 : _session(session)
-, _api(_session->api().instance()) {
+, _api(_session->api().instance()),
+_dhConfigUpdater(_session, 0, bytes::vector()){
 }
 
 void Instance::startOutgoingCall(not_null<UserData*> user) {
@@ -141,12 +142,13 @@ void Instance::refreshDhConfig() {
 	Expects(_currentCall != nullptr);
 
 	const auto weak = base::make_weak(_currentCall);
+	const auto dhConfigVersion = _dhConfigUpdater.getDhConfig()->version;
 	_api.request(MTPmessages_GetDhConfig(
-		MTP_int(_dhConfig.version),
+		MTP_int(dhConfigVersion),
 		MTP_int(MTP::ModExpFirst::kRandomPowerSize)
 	)).done([=](const MTPmessages_DhConfig &result) {
 		const auto call = weak.get();
-		const auto random = updateDhConfig(result);
+		const auto random = _dhConfigUpdater.updateDhConfig(result);
 		if (!call) {
 			return;
 		}
@@ -163,39 +165,6 @@ void Instance::refreshDhConfig() {
 		}
 		callFailed(call);
 	}).send();
-}
-
-bytes::const_span Instance::updateDhConfig(
-		const MTPmessages_DhConfig &data) {
-	const auto validRandom = [](const QByteArray & random) {
-		if (random.size() != MTP::ModExpFirst::kRandomPowerSize) {
-			return false;
-		}
-		return true;
-	};
-	return data.match([&](const MTPDmessages_dhConfig &data)
-	-> bytes::const_span {
-		auto primeBytes = bytes::make_vector(data.vp().v);
-		if (!MTP::IsPrimeAndGood(primeBytes, data.vg().v)) {
-			LOG(("API Error: bad p/g received in dhConfig."));
-			return {};
-		} else if (!validRandom(data.vrandom().v)) {
-			return {};
-		}
-		_dhConfig.g = data.vg().v;
-		_dhConfig.p = std::move(primeBytes);
-		_dhConfig.version = data.vversion().v;
-		return bytes::make_span(data.vrandom().v);
-	}, [&](const MTPDmessages_dhConfigNotModified &data)
-	-> bytes::const_span {
-		if (!_dhConfig.g || _dhConfig.p.empty()) {
-			LOG(("API Error: dhConfigNotModified on zero version."));
-			return {};
-		} else if (!validRandom(data.vrandom().v)) {
-			return {};
-		}
-		return bytes::make_span(data.vrandom().v);
-	});
 }
 
 void Instance::refreshServerConfig() {

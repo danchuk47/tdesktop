@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "mtproto/sender.h"
 #include "mtproto/mtproto_auth_key.h"
+#include "dh/dh_encryptionkey_exchanger.h"
 
 namespace Media {
 namespace Audio {
@@ -25,17 +26,11 @@ class VoIPController;
 
 namespace Calls {
 
-struct DhConfig {
-	int32 version = 0;
-	int32 g = 0;
-	bytes::vector p;
-};
-
 class Call : public base::has_weak_ptr {
 public:
 	class Delegate {
 	public:
-		virtual DhConfig getDhConfig() const = 0;
+		virtual DhExchangeKey::DhConfig getDhConfig() const = 0;
 		virtual void callFinished(not_null<Call*> call) = 0;
 		virtual void callFailed(not_null<Call*> call) = 0;
 		virtual void callRedial(not_null<Call*> call) = 0;
@@ -198,7 +193,7 @@ private:
 	bool _mute = false;
 	base::Observable<bool> _muteChanged;
 
-	DhConfig _dhConfig;
+	DhExchangeKey::DhConfig _dhConfig;
 	bytes::vector _ga;
 	bytes::vector _gb;
 	bytes::vector _gaHash;

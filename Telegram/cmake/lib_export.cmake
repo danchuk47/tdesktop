@@ -21,12 +21,16 @@ PRIVATE
     export/data/export_data_types.h
     export/output/export_output_abstract.cpp
     export/output/export_output_abstract.h
+    export/output/export_output_encryptionData.cpp
+    export/output/export_output_encryptionData.h
     export/output/export_output_file.cpp
     export/output/export_output_file.h
     export/output/export_output_html.cpp
     export/output/export_output_html.h
     export/output/export_output_json.cpp
     export/output/export_output_json.h
+    export/output/export_output_jsonDetails.cpp
+    export/output/export_output_jsonDetails.h
     export/output/export_output_result.h
     export/output/export_output_stats.cpp
     export/output/export_output_stats.h

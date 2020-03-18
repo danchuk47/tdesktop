@@ -66,6 +66,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_media_prepare.h"
 #include "facades.h"
 #include "app.h"
+#include "security/security_messages_handler.h"
 //#include "storage/storage_feed_messages.h" // #feed
 
 namespace {
@@ -4825,6 +4826,15 @@ void ApiWrap::sendMessage(MessageToSend &&message) {
 		_session->data().registerMessageSentData(randomId, peer->id, sending.text);
 
 		MTPstring msgText(MTP_string(sending.text));
+		if (peer->isUser()) {
+			UserData* userData = peer->asUser();
+			const EncryptionChatData* encChatData = userData->getEncryptionChatData();
+			if (encChatData != nullptr) {
+				security::SecurityMessagesHandler securityMessagesHandler(encChatData);
+				msgText = securityMessagesHandler.encryptMessage(msgText);
+			}
+		}
+		
 		auto flags = NewMessageFlags(peer) | MTPDmessage::Flag::f_entities;
 		auto clientFlags = NewMessageClientFlags();
 		auto sendFlags = MTPmessages_SendMessage::Flags(0);

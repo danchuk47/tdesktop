@@ -21,140 +21,32 @@ namespace Export {
 namespace Output {
 namespace {
 
-using Context = details::JsonContext;
-
-QByteArray SerializeString(const QByteArray &value) {
-	const auto size = value.size();
-	const auto begin = value.data();
-	const auto end = begin + size;
-
-	auto result = QByteArray();
-	result.reserve(2 + size * 4);
-	result.append('"');
-	for (auto p = begin; p != end; ++p) {
-		const auto ch = *p;
-		if (ch == '\n') {
-			result.append("\\n", 2);
-		} else if (ch == '\r') {
-			result.append("\\r", 2);
-		} else if (ch == '\t') {
-			result.append("\\t", 2);
-		} else if (ch == '"') {
-			result.append("\\\"", 2);
-		} else if (ch == '\\') {
-			result.append("\\\\", 2);
-		} else if (ch >= 0 && ch < 32) {
-			result.append("\\x", 2).append('0' + (ch >> 4));
-			const auto left = (ch & 0x0F);
-			if (left >= 10) {
-				result.append('A' + (left - 10));
-			} else {
-				result.append('0' + left);
-			}
-		} else if (ch == char(0xE2)
-			&& (p + 2 < end)
-			&& *(p + 1) == char(0x80)) {
-			if (*(p + 2) == char(0xA8)) { // Line separator.
-				result.append("\\u2028", 6);
-			} else if (*(p + 2) == char(0xA9)) { // Paragraph separator.
-				result.append("\\u2029", 6);
-			} else {
-				result.append(ch);
-			}
-		} else {
-			result.append(ch);
-		}
-	}
-	result.append('"');
-	return result;
-}
-
-QByteArray SerializeDate(TimeId date) {
-	return SerializeString(
-		QDateTime::fromTime_t(date).toString(Qt::ISODate).toUtf8());
-}
+using Context = std::shared_ptr<details::JsonContext>;;
 
 QByteArray StringAllowEmpty(const Data::Utf8String &data) {
-	return data.isEmpty() ? data : SerializeString(data);
+	return data.isEmpty() ? data : JsonDataBuilder::SerializeString(data);
 }
 
 QByteArray StringAllowNull(const Data::Utf8String &data) {
-	return data.isEmpty() ? QByteArray("null") : SerializeString(data);
-}
-
-QByteArray Indentation(int size) {
-	return QByteArray(size, ' ');
-}
-
-QByteArray Indentation(const Context &context) {
-	return Indentation(context.nesting.size());
-}
-
-QByteArray SerializeObject(
-		Context &context,
-		const std::vector<std::pair<QByteArray, QByteArray>> &values) {
-	const auto indent = Indentation(context);
-
-	context.nesting.push_back(Context::kObject);
-	const auto guard = gsl::finally([&] { context.nesting.pop_back(); });
-	const auto next = '\n' + Indentation(context);
-
-	auto first = true;
-	auto result = QByteArray();
-	result.append('{');
-	for (const auto &[key, value] : values) {
-		if (value.isEmpty()) {
-			continue;
-		}
-		if (first) {
-			first = false;
-		} else {
-			result.append(',');
-		}
-		result.append(next).append(SerializeString(key)).append(": ", 2);
-		result.append(value);
-	}
-	result.append('\n').append(indent).append("}");
-	return result;
-}
-
-QByteArray SerializeArray(
-		Context &context,
-		const std::vector<QByteArray> &values) {
-	const auto indent = Indentation(context.nesting.size());
-	const auto next = '\n' + Indentation(context.nesting.size() + 1);
-
-	auto first = true;
-	auto result = QByteArray();
-	result.append('[');
-	for (const auto &value : values) {
-		if (first) {
-			first = false;
-		} else {
-			result.append(',');
-		}
-		result.append(next).append(value);
-	}
-	result.append('\n').append(indent).append("]");
-	return result;
+	return data.isEmpty() ? QByteArray("null") : JsonDataBuilder::SerializeString(data);
 }
 
 QByteArray SerializeText(
-		Context &context,
+		const Context &context,
 		const std::vector<Data::TextPart> &data) {
 	using Type = Data::TextPart::Type;
 
 	if (data.empty()) {
-		return SerializeString("");
+		return JsonDataBuilder::SerializeString("");
 	}
 
-	context.nesting.push_back(Context::kArray);
+	context->nesting.push_back(details::JsonContext::kArray);
 
 	const auto text = ranges::view::all(
 		data
 	) | ranges::view::transform([&](const Data::TextPart &part) {
 		if (part.type == Type::Text) {
-			return SerializeString(part.text);
+			return JsonDataBuilder::SerializeString(part.text);
 		}
 		const auto typeString = [&] {
 			switch (part.type) {
@@ -188,21 +80,21 @@ QByteArray SerializeText(
 		const auto additionalValue = (part.type == Type::MentionName)
 			? part.additional
 			: (part.type == Type::Pre || part.type == Type::TextUrl)
-			? SerializeString(part.additional)
+			? JsonDataBuilder::SerializeString(part.additional)
 			: QByteArray();
-		return SerializeObject(context, {
-			{ "type", SerializeString(typeString) },
-			{ "text", SerializeString(part.text) },
+		return JsonDataBuilder::SerializeObject(context, {
+			{ "type", JsonDataBuilder::SerializeString(typeString) },
+			{ "text", JsonDataBuilder::SerializeString(part.text) },
 			{ additionalName, additionalValue },
 		});
 	}) | ranges::to_vector;
 
-	context.nesting.pop_back();
+	context->nesting.pop_back();
 
 	if (data.size() == 1 && data[0].type == Data::TextPart::Type::Text) {
 		return text[0];
 	}
-	return SerializeArray(context, text);
+	return JsonDataBuilder::SerializeArray(context, text);
 }
 
 Data::Utf8String FormatUsername(const Data::Utf8String &username) {
@@ -214,16 +106,16 @@ QByteArray FormatFilePath(const Data::File &file) {
 }
 
 QByteArray SerializeMessage(
-		Context &context,
+		const Context &context,
 		const Data::Message &message,
 		const std::map<Data::PeerId, Data::Peer> &peers,
 		const QString &internalLinksDomain) {
 	using namespace Data;
 
 	if (message.media.content.is<UnsupportedMedia>()) {
-		return SerializeObject(context, {
+		return JsonDataBuilder::SerializeObject(context, {
 			{ "id", Data::NumberToString(message.id) },
-			{ "type", SerializeString("unsupported") }
+			{ "type", JsonDataBuilder::SerializeString("unsupported") }
 		});
 	}
 
@@ -253,16 +145,16 @@ QByteArray SerializeMessage(
 	{ "id", NumberToString(message.id) },
 	{
 		"type",
-		SerializeString(message.action.content ? "service" : "message")
+		JsonDataBuilder::SerializeString(message.action.content ? "service" : "message")
 	},
-	{ "date", SerializeDate(message.date) },
-	{ "edited", SerializeDate(message.edited) },
+	{ "date", JsonDataBuilder::SerializeDate(message.date) },
+	{ "edited", JsonDataBuilder::SerializeDate(message.edited) },
 	};
 
-	context.nesting.push_back(Context::kObject);
+	context->nesting.push_back(details::JsonContext::kObject);
 	const auto serialized = [&] {
-		context.nesting.pop_back();
-		return SerializeObject(context, values);
+		context->nesting.pop_back();
+		return JsonDataBuilder::SerializeObject(context, values);
 	};
 
 	const auto pushBare = [&](
@@ -278,7 +170,7 @@ QByteArray SerializeMessage(
 		} else {
 			const auto wrapped = QByteArray(value);
 			if (!wrapped.isEmpty()) {
-				pushBare(key, SerializeString(wrapped));
+				pushBare(key, JsonDataBuilder::SerializeString(wrapped));
 			}
 		}
 	};
@@ -307,7 +199,7 @@ QByteArray SerializeMessage(
 		for (const auto userId : data) {
 			list.push_back(wrapUserName(userId));
 		}
-		pushBare(label, SerializeArray(context, list));
+		pushBare(label, JsonDataBuilder::SerializeArray(context, list));
 	};
 	const auto pushActor = [&] {
 		pushFrom("actor");
@@ -439,7 +331,7 @@ QByteArray SerializeMessage(
 		pushAction("send_passport_values");
 		auto list = std::vector<QByteArray>();
 		for (const auto type : data.types) {
-			list.push_back(SerializeString([&] {
+			list.push_back(JsonDataBuilder::SerializeString([&] {
 				using Type = ActionSecureValuesSent::Type;
 				switch (type) {
 				case Type::PersonalDetails: return "personal_details";
@@ -461,7 +353,7 @@ QByteArray SerializeMessage(
 				return "";
 			}()));
 		}
-		pushBare("values", SerializeArray(context, list));
+		pushBare("values", JsonDataBuilder::SerializeArray(context, list));
 	}, [&](const ActionContactSignUp &data) {
 		pushActor();
 		pushAction("joined_telegram");
@@ -534,12 +426,12 @@ QByteArray SerializeMessage(
 		}
 		pushTTL();
 	}, [&](const SharedContact &data) {
-		pushBare("contact_information", SerializeObject(context, {
-			{ "first_name", SerializeString(data.info.firstName) },
-			{ "last_name", SerializeString(data.info.lastName) },
+		pushBare("contact_information", JsonDataBuilder::SerializeObject(context, {
+			{ "first_name", JsonDataBuilder::SerializeString(data.info.firstName) },
+			{ "last_name", JsonDataBuilder::SerializeString(data.info.lastName) },
 			{
 				"phone_number",
-				SerializeString(FormatPhoneNumber(data.info.phoneNumber))
+				JsonDataBuilder::SerializeString(FormatPhoneNumber(data.info.phoneNumber))
 			}
 		}));
 		if (!data.vcard.content.isEmpty()) {
@@ -548,7 +440,7 @@ QByteArray SerializeMessage(
 	}, [&](const GeoPoint &data) {
 		pushBare(
 			"location_information",
-			data.valid ? SerializeObject(context, {
+			data.valid ? JsonDataBuilder::SerializeObject(context, {
 			{ "latitude", NumberToString(data.latitude) },
 			{ "longitude", NumberToString(data.longitude) },
 			}) : QByteArray("null"));
@@ -557,7 +449,7 @@ QByteArray SerializeMessage(
 		push("place_name", data.title);
 		push("address", data.address);
 		if (data.point.valid) {
-			pushBare("location_information", SerializeObject(context, {
+			pushBare("location_information", JsonDataBuilder::SerializeObject(context, {
 				{ "latitude", NumberToString(data.point.latitude) },
 				{ "longitude", NumberToString(data.point.longitude) },
 			}));
@@ -575,34 +467,34 @@ QByteArray SerializeMessage(
 			}
 		}
 	}, [&](const Invoice &data) {
-		push("invoice_information", SerializeObject(context, {
-			{ "title", SerializeString(data.title) },
-			{ "description", SerializeString(data.description) },
+		push("invoice_information", JsonDataBuilder::SerializeObject(context, {
+			{ "title", JsonDataBuilder::SerializeString(data.title) },
+			{ "description", JsonDataBuilder::SerializeString(data.description) },
 			{ "amount", NumberToString(data.amount) },
-			{ "currency", SerializeString(data.currency) },
+			{ "currency", JsonDataBuilder::SerializeString(data.currency) },
 			{ "receipt_message_id", (data.receiptMsgId
 				? NumberToString(data.receiptMsgId)
 				: QByteArray()) }
 		}));
 	}, [&](const Poll &data) {
-		context.nesting.push_back(Context::kObject);
+		context->nesting.push_back(details::JsonContext::kObject);
 		const auto answers = ranges::view::all(
 			data.answers
 		) | ranges::view::transform([&](const Poll::Answer &answer) {
-			context.nesting.push_back(Context::kArray);
-			auto result = SerializeObject(context, {
-				{ "text", SerializeString(answer.text) },
+			context->nesting.push_back(details::JsonContext::kArray);
+			auto result = JsonDataBuilder::SerializeObject(context, {
+				{ "text", JsonDataBuilder::SerializeString(answer.text) },
 				{ "voters", NumberToString(answer.votes) },
 				{ "chosen", answer.my ? "true" : "false" },
 			});
-			context.nesting.pop_back();
+			context->nesting.pop_back();
 			return result;
 		}) | ranges::to_vector;
-		const auto serialized = SerializeArray(context, answers);
-		context.nesting.pop_back();
+		const auto serialized = JsonDataBuilder::SerializeArray(context, answers);
+		context->nesting.pop_back();
 
-		pushBare("poll", SerializeObject(context, {
-			{ "question", SerializeString(data.question) },
+		pushBare("poll", JsonDataBuilder::SerializeObject(context, {
+			{ "question", JsonDataBuilder::SerializeString(data.question) },
 			{ "closed", data.closed ? "true" : "false" },
 			{ "total_voters", NumberToString(data.totalVotes) },
 			{ "answers", serialized }
@@ -630,44 +522,10 @@ Result JsonWriter::start(
 	_stats = stats;
 	_output = fileWithRelativePath(mainFileRelativePath());
 
-	auto block = pushNesting(Context::kObject);
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(_environment.aboutTelegram));
+	auto block = _dataBuilder.pushNesting(details::JsonContext::kObject);
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(JsonDataBuilder::SerializeString(_environment.aboutTelegram));
 	return _output->writeBlock(block);
-}
-
-QByteArray JsonWriter::pushNesting(Context::Type type) {
-	Expects(_output != nullptr);
-
-	_context.nesting.push_back(type);
-	_currentNestingHadItem = false;
-	return (type == Context::kObject ? "{" : "[");
-}
-
-QByteArray JsonWriter::prepareObjectItemStart(const QByteArray &key) {
-	const auto guard = gsl::finally([&] { _currentNestingHadItem = true; });
-	return (_currentNestingHadItem ? ",\n" : "\n")
-		+ Indentation(_context)
-		+ SerializeString(key)
-		+ ": ";
-}
-
-QByteArray JsonWriter::prepareArrayItemStart() {
-	const auto guard = gsl::finally([&] { _currentNestingHadItem = true; });
-	return (_currentNestingHadItem ? ",\n" : "\n") + Indentation(_context);
-}
-
-QByteArray JsonWriter::popNesting() {
-	Expects(_output != nullptr);
-	Expects(!_context.nesting.empty());
-
-	const auto type = Context::Type(_context.nesting.back());
-	_context.nesting.pop_back();
-
-	_currentNestingHadItem = true;
-	return '\n'
-		+ Indentation(_context)
-		+ (type == Context::kObject ? '}' : ']');
 }
 
 Result JsonWriter::writePersonal(const Data::PersonalInfo &data) {
@@ -675,25 +533,25 @@ Result JsonWriter::writePersonal(const Data::PersonalInfo &data) {
 
 	const auto &info = data.user.info;
 	return _output->writeBlock(
-		prepareObjectItemStart("personal_information")
-		+ SerializeObject(_context, {
+		_dataBuilder.prepareObjectItemStart("personal_information")
+		+ _dataBuilder.SerializeObject({
 		{ "user_id", Data::NumberToString(data.user.id) },
-		{ "first_name", SerializeString(info.firstName) },
-		{ "last_name", SerializeString(info.lastName) },
+		{ "first_name", JsonDataBuilder::SerializeString(info.firstName) },
+		{ "last_name", JsonDataBuilder::SerializeString(info.lastName) },
 		{
 			"phone_number",
-			SerializeString(Data::FormatPhoneNumber(info.phoneNumber))
+			JsonDataBuilder::SerializeString(Data::FormatPhoneNumber(info.phoneNumber))
 		},
 		{
 			"username",
 			(!data.user.username.isEmpty()
-				? SerializeString(FormatUsername(data.user.username))
+				? JsonDataBuilder::SerializeString(FormatUsername(data.user.username))
 				: QByteArray())
 		},
 		{
 			"bio",
 			(!data.bio.isEmpty()
-				? SerializeString(data.bio)
+				? JsonDataBuilder::SerializeString(data.bio)
 				: QByteArray())
 		},
 	}));
@@ -702,8 +560,8 @@ Result JsonWriter::writePersonal(const Data::PersonalInfo &data) {
 Result JsonWriter::writeUserpicsStart(const Data::UserpicsInfo &data) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart("profile_pictures");
-	return _output->writeBlock(block + pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart("profile_pictures");
+	return _output->writeBlock(block + _dataBuilder.pushNesting(details::JsonContext::kArray));
 }
 
 Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
@@ -730,15 +588,15 @@ Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 			}
 			Unexpected("Skip reason while writing photo path.");
 		}();
-		block.append(prepareArrayItemStart());
-		block.append(SerializeObject(_context, {
+		block.append(_dataBuilder.prepareArrayItemStart());
+		block.append(_dataBuilder.SerializeObject({
 			{
 				"date",
-				userpic.date ? SerializeDate(userpic.date) : QByteArray()
+				userpic.date ? _dataBuilder.SerializeDate(userpic.date) : QByteArray()
 			},
 			{
 				"photo",
-				SerializeString(path)
+				JsonDataBuilder::SerializeString(path)
 			},
 		}));
 	}
@@ -748,7 +606,7 @@ Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 Result JsonWriter::writeUserpicsEnd() {
 	Expects(_output != nullptr);
 
-	return _output->writeBlock(popNesting());
+	return _output->writeBlock(_dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeContactsList(const Data::ContactsList &data) {
@@ -765,49 +623,49 @@ Result JsonWriter::writeContactsList(const Data::ContactsList &data) {
 Result JsonWriter::writeSavedContacts(const Data::ContactsList &data) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart("contacts");
-	block.append(pushNesting(Context::kObject));
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(_environment.aboutContacts));
-	block.append(prepareObjectItemStart("list"));
-	block.append(pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart("contacts");
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(_dataBuilder.SerializeString(_environment.aboutContacts));
+	block.append(_dataBuilder.prepareObjectItemStart("list"));
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 	for (const auto index : Data::SortedContactsIndices(data)) {
 		const auto &contact = data.list[index];
-		block.append(prepareArrayItemStart());
+		block.append(_dataBuilder.prepareArrayItemStart());
 
 		if (contact.firstName.isEmpty()
 			&& contact.lastName.isEmpty()
 			&& contact.phoneNumber.isEmpty()) {
-			block.append(SerializeObject(_context, {
-				{ "date", SerializeDate(contact.date) }
+			block.append(_dataBuilder.SerializeObject({
+				{ "date", _dataBuilder.SerializeDate(contact.date) }
 			}));
 		} else {
-			block.append(SerializeObject(_context, {
+			block.append(_dataBuilder.SerializeObject({
 				{ "user_id", Data::NumberToString(contact.userId) },
-				{ "first_name", SerializeString(contact.firstName) },
-				{ "last_name", SerializeString(contact.lastName) },
+				{ "first_name", _dataBuilder.SerializeString(contact.firstName) },
+				{ "last_name", _dataBuilder.SerializeString(contact.lastName) },
 				{
 					"phone_number",
-					SerializeString(
+					_dataBuilder.SerializeString(
 						Data::FormatPhoneNumber(contact.phoneNumber))
 				},
-				{ "date", SerializeDate(contact.date) }
+				{ "date", _dataBuilder.SerializeDate(contact.date) }
 			}));
 		}
 	}
-	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	block.append(_dataBuilder.popNesting());
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeFrequentContacts(const Data::ContactsList &data) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart("frequent_contacts");
-	block.append(pushNesting(Context::kObject));
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(_environment.aboutFrequent));
-	block.append(prepareObjectItemStart("list"));
-	block.append(pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart("frequent_contacts");
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(_dataBuilder.SerializeString(_environment.aboutFrequent));
+	block.append(_dataBuilder.prepareObjectItemStart("list"));
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 	const auto writeList = [&](
 			const std::vector<Data::TopPeer> &peers,
 			Data::Utf8String category) {
@@ -826,11 +684,11 @@ Result JsonWriter::writeFrequentContacts(const Data::ContactsList &data) {
 				}
 				return "user";
 			}();
-			block.append(prepareArrayItemStart());
-			block.append(SerializeObject(_context, {
+			block.append(_dataBuilder.prepareArrayItemStart());
+			block.append(_dataBuilder.SerializeObject({
 				{ "id", Data::NumberToString(top.peer.id()) },
-				{ "category", SerializeString(category) },
-				{ "type", SerializeString(type) },
+				{ "category", _dataBuilder.SerializeString(category) },
+				{ "type", _dataBuilder.SerializeString(type) },
 				{ "name",  StringAllowNull(top.peer.name()) },
 				{ "rating", Data::NumberToString(top.rating) },
 			}));
@@ -839,8 +697,8 @@ Result JsonWriter::writeFrequentContacts(const Data::ContactsList &data) {
 	writeList(data.correspondents, "people");
 	writeList(data.inlineBots, "inline_bots");
 	writeList(data.phoneCalls, "calls");
-	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	block.append(_dataBuilder.popNesting());
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeSessionsList(const Data::SessionsList &data) {
@@ -872,29 +730,29 @@ Result JsonWriter::writeOtherData(const Data::File &data) {
 	if (error.error != QJsonParseError::NoError) {
 		return Result(Result::Type::FatalError, f.fileName());
 	}
-	auto block = prepareObjectItemStart("other_data");
+	auto block = _dataBuilder.prepareObjectItemStart("other_data");
 	Fn<void(const QJsonObject &data)> pushObject;
 	Fn<void(const QJsonArray &data)> pushArray;
 	Fn<void(const QJsonValue &data)> pushValue;
 	pushObject = [&](const QJsonObject &data) {
-		block.append(pushNesting(Context::kObject));
+		block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
 		for (auto i = data.begin(); i != data.end(); ++i) {
 			if ((*i).type() != QJsonValue::Undefined) {
-				block.append(prepareObjectItemStart(i.key().toUtf8()));
+				block.append(_dataBuilder.prepareObjectItemStart(i.key().toUtf8()));
 				pushValue(*i);
 			}
 		}
-		block.append(popNesting());
+		block.append(_dataBuilder.popNesting());
 	};
 	pushArray = [&](const QJsonArray &data) {
-		block.append(pushNesting(Context::kArray));
+		block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 		for (auto i = data.begin(); i != data.end(); ++i) {
 			if ((*i).type() != QJsonValue::Undefined) {
-				block.append(prepareArrayItemStart());
+				block.append(_dataBuilder.prepareArrayItemStart());
 				pushValue(*i);
 			}
 		}
-		block.append(popNesting());
+		block.append(_dataBuilder.popNesting());
 	};
 	pushValue = [&](const QJsonValue &data) {
 		switch (data.type()) {
@@ -908,7 +766,7 @@ Result JsonWriter::writeOtherData(const Data::File &data) {
 			block.append(Data::NumberToString(data.toDouble()));
 			return;
 		case QJsonValue::String:
-			block.append(SerializeString(data.toString().toUtf8()));
+			block.append(_dataBuilder.SerializeString(data.toString().toUtf8()));
 			return;
 		case QJsonValue::Array:
 			return pushArray(data.toArray());
@@ -928,19 +786,19 @@ Result JsonWriter::writeOtherData(const Data::File &data) {
 Result JsonWriter::writeSessions(const Data::SessionsList &data) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart("sessions");
-	block.append(pushNesting(Context::kObject));
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(_environment.aboutSessions));
-	block.append(prepareObjectItemStart("list"));
-	block.append(pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart("sessions");
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(_dataBuilder.SerializeString(_environment.aboutSessions));
+	block.append(_dataBuilder.prepareObjectItemStart("list"));
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 	for (const auto &session : data.list) {
-		block.append(prepareArrayItemStart());
-		block.append(SerializeObject(_context, {
-			{ "last_active", SerializeDate(session.lastActive) },
-			{ "last_ip", SerializeString(session.ip) },
-			{ "last_country", SerializeString(session.country) },
-			{ "last_region", SerializeString(session.region) },
+		block.append(_dataBuilder.prepareArrayItemStart());
+		block.append(_dataBuilder.SerializeObject({
+			{ "last_active", _dataBuilder.SerializeDate(session.lastActive) },
+			{ "last_ip", _dataBuilder.SerializeString(session.ip) },
+			{ "last_country", _dataBuilder.SerializeString(session.country) },
+			{ "last_region", _dataBuilder.SerializeString(session.region) },
 			{
 				"application_name",
 				StringAllowNull(session.applicationName)
@@ -949,40 +807,40 @@ Result JsonWriter::writeSessions(const Data::SessionsList &data) {
 				"application_version",
 				StringAllowEmpty(session.applicationVersion)
 			},
-			{ "device_model", SerializeString(session.deviceModel) },
-			{ "platform", SerializeString(session.platform) },
-			{ "system_version", SerializeString(session.systemVersion) },
-			{ "created", SerializeDate(session.created) },
+			{ "device_model", _dataBuilder.SerializeString(session.deviceModel) },
+			{ "platform", _dataBuilder.SerializeString(session.platform) },
+			{ "system_version", _dataBuilder.SerializeString(session.systemVersion) },
+			{ "created", _dataBuilder.SerializeDate(session.created) },
 		}));
 	}
-	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	block.append(_dataBuilder.popNesting());
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeWebSessions(const Data::SessionsList &data) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart("web_sessions");
-	block.append(pushNesting(Context::kObject));
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(_environment.aboutWebSessions));
-	block.append(prepareObjectItemStart("list"));
-	block.append(pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart("web_sessions");
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(_dataBuilder.SerializeString(_environment.aboutWebSessions));
+	block.append(_dataBuilder.prepareObjectItemStart("list"));
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 	for (const auto &session : data.webList) {
-		block.append(prepareArrayItemStart());
-		block.append(SerializeObject(_context, {
-			{ "last_active", SerializeDate(session.lastActive) },
-			{ "last_ip", SerializeString(session.ip) },
-			{ "last_region", SerializeString(session.region) },
+		block.append(_dataBuilder.prepareArrayItemStart());
+		block.append(_dataBuilder.SerializeObject({
+			{ "last_active", _dataBuilder.SerializeDate(session.lastActive) },
+			{ "last_ip", _dataBuilder.SerializeString(session.ip) },
+			{ "last_region", _dataBuilder.SerializeString(session.region) },
 			{ "bot_username", StringAllowNull(session.botUsername) },
 			{ "domain_name", StringAllowNull(session.domain) },
-			{ "browser", SerializeString(session.browser) },
-			{ "platform", SerializeString(session.platform) },
-			{ "created", SerializeDate(session.created) },
+			{ "browser", _dataBuilder.SerializeString(session.browser) },
+			{ "platform", _dataBuilder.SerializeString(session.platform) },
+			{ "created", _dataBuilder.SerializeDate(session.created) },
 		}));
 	}
-	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	block.append(_dataBuilder.popNesting());
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeDialogsStart(const Data::DialogsInfo &data) {
@@ -1013,18 +871,18 @@ Result JsonWriter::writeDialogStart(const Data::DialogInfo &data) {
 		Unexpected("Dialog type in TypeString.");
 	};
 
-	auto block = prepareArrayItemStart();
-	block.append(pushNesting(Context::kObject));
+	auto block = _dataBuilder.prepareArrayItemStart();
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
 	if (data.type != Type::Self) {
-		block.append(prepareObjectItemStart("name")
+		block.append(_dataBuilder.prepareObjectItemStart("name")
 			+ StringAllowNull(data.name));
 	}
-	block.append(prepareObjectItemStart("type")
+	block.append(_dataBuilder.prepareObjectItemStart("type")
 		+ StringAllowNull(TypeString(data.type)));
-	block.append(prepareObjectItemStart("id")
+	block.append(_dataBuilder.prepareObjectItemStart("id")
 		+ Data::NumberToString(data.peerId));
-	block.append(prepareObjectItemStart("messages"));
-	block.append(pushNesting(Context::kArray));
+	block.append(_dataBuilder.prepareObjectItemStart("messages"));
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kArray));
 	return _output->writeBlock(block);
 }
 
@@ -1055,8 +913,8 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 		if (Data::SkipMessageByDate(message, _settings)) {
 			continue;
 		}
-		block.append(prepareArrayItemStart() + SerializeMessage(
-			_context,
+		block.append(_dataBuilder.prepareArrayItemStart() + SerializeMessage(
+			_dataBuilder.getContext(),
 			message,
 			data.peers,
 			_environment.internalLinksDomain));
@@ -1067,8 +925,8 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 Result JsonWriter::writeDialogEnd() {
 	Expects(_output != nullptr);
 
-	auto block = popNesting();
-	return _output->writeBlock(block + popNesting());
+	auto block = _dataBuilder.popNesting();
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::writeDialogsEnd() {
@@ -1080,26 +938,26 @@ Result JsonWriter::writeChatsStart(
 		const QByteArray &about) {
 	Expects(_output != nullptr);
 
-	auto block = prepareObjectItemStart(listName);
-	block.append(pushNesting(Context::kObject));
-	block.append(prepareObjectItemStart("about"));
-	block.append(SerializeString(about));
-	block.append(prepareObjectItemStart("list"));
-	return _output->writeBlock(block + pushNesting(Context::kArray));
+	auto block = _dataBuilder.prepareObjectItemStart(listName);
+	block.append(_dataBuilder.pushNesting(details::JsonContext::kObject));
+	block.append(_dataBuilder.prepareObjectItemStart("about"));
+	block.append(_dataBuilder.SerializeString(about));
+	block.append(_dataBuilder.prepareObjectItemStart("list"));
+	return _output->writeBlock(block + _dataBuilder.pushNesting(details::JsonContext::kArray));
 }
 
 Result JsonWriter::writeChatsEnd() {
 	Expects(_output != nullptr);
 
-	auto block = popNesting();
-	return _output->writeBlock(block + popNesting());
+	auto block = _dataBuilder.popNesting();
+	return _output->writeBlock(block + _dataBuilder.popNesting());
 }
 
 Result JsonWriter::finish() {
 	Expects(_output != nullptr);
 
-	auto block = popNesting();
-	Assert(_context.nesting.empty());
+	auto block = _dataBuilder.popNesting();
+	Assert(_dataBuilder.isContextNestingEmpty());
 	return _output->writeBlock(block);
 }
 

@@ -683,6 +683,9 @@ public:
 
 	void clearLocalStorage();
 
+	void setEncryptionDataFromCache();
+	void setEncryptionDataToCache()const;
+
 private:
 	using Messages = std::unordered_map<MsgId, not_null<HistoryItem*>>;
 

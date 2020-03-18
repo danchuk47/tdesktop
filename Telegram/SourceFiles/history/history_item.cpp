@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "facades.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_history.h"
+#include "security/security_messages_handler.h"
 
 namespace {
 
@@ -905,11 +906,65 @@ ClickHandlerPtr goToMessageClickHandler(
 	});
 }
 
+MTPMessage HistoryItem::decryptMessage(not_null<History*> history, const MTPMessage& message) {
+	if (history->peer->isUser()) {
+		UserData* userData = history->peer->asUser();
+
+		const EncryptionChatData* encChatData = userData->getEncryptionChatData();
+		if (encChatData != nullptr) {
+			security::SecurityMessagesHandler securityMessagesHandler(encChatData);
+
+			return message.match([&](const MTPDmessage& data) -> MTPMessage {
+				MTPString encryptedMessage = securityMessagesHandler.decryptMessage(data.vmessage());
+				const MTPint* fromId = data.vfrom_id();
+				const MTPMessageFwdHeader* fwdFrom = data.vfwd_from();
+				const MTPint* viaBotId = data.vvia_bot_id();
+				const MTPint* replyToMsgId = data.vvia_bot_id();
+				const MTPMessageMedia* media = data.vmedia();
+				const MTPReplyMarkup* replyMarkup = data.vreply_markup();
+				const MTPVector<MTPMessageEntity>* entities = data.ventities();
+				const MTPint* views = data.vviews();
+				const MTPint* editDate = data.vedit_date();
+				const MTPstring* postAuthor = data.vpost_author();
+				const MTPlong* groupedId = data.vgrouped_id();
+				const MTPVector<MTPRestrictionReason>* restictionReason = data.vrestriction_reason();
+
+				return MTP_message(
+					data.vflags(),
+					data.vid(),
+					fromId ? *fromId : MTPInt(),
+					data.vto_id(),
+					fwdFrom ? *fwdFrom : MTPMessageFwdHeader(),
+					viaBotId ? *viaBotId : MTPInt(),
+					replyToMsgId ? *replyToMsgId : MTPInt(),
+					data.vdate(),
+					encryptedMessage,
+					media ? *media : MTPMessageMedia(),
+					replyMarkup ? *replyMarkup : MTPReplyMarkup(),
+					entities ? *entities : MTPVector<MTPMessageEntity>(),
+					views ? *views : MTPInt(),
+					editDate ? *editDate : MTPInt(),
+					postAuthor ? *postAuthor : MTPString(),
+					groupedId ? *groupedId : MTPLong(),
+					restictionReason ? *restictionReason : MTPVector<MTPRestrictionReason>());
+			}, [&](const MTPDmessageService& data) -> MTPMessage {
+				return  message;
+			}, [&](const MTPDmessageEmpty& data) -> MTPMessage {
+				return message;
+			});
+		}
+	}
+	return message;
+}
+
 not_null<HistoryItem*> HistoryItem::Create(
 		not_null<History*> history,
 		const MTPMessage &message,
 		MTPDmessage_ClientFlags clientFlags) {
-	return message.match([&](const MTPDmessage &data) -> HistoryItem* {
+
+	MTPMessage decryptedMessage = decryptMessage(history, message);
+
+	return decryptedMessage.match([&](const MTPDmessage &data) -> HistoryItem* {
 		const auto media = data.vmedia();
 		const auto checked = media
 			? CheckMessageMedia(*media)

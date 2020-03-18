@@ -640,6 +640,8 @@ private:
 	void setupScheduledToggle();
 	void refreshScheduledToggle();
 
+	void requestEncryption();
+
 	MsgId _replyToId = 0;
 	Ui::Text::String _replyToName;
 	int _replyToNameVersion = 0;

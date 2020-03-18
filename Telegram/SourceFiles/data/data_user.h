@@ -9,6 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_peer.h"
 
+namespace DhExchangeKey {
+	struct DhConfig;
+}
+
 class BotCommand {
 public:
 	BotCommand(const QString &command, const QString &description);
@@ -22,6 +26,17 @@ private:
 	QString _description;
 	mutable Ui::Text::String _descriptionText;
 
+};
+
+struct EncryptionChatData {
+	int32 g = 0;
+	bytes::vector p;
+	bytes::vector g_a;
+	bytes::vector g_b;
+	bytes::vector secretKey;
+	bytes::vector encryptionKey;
+	int32 encryptionChatId = 0;
+	int32 dhConfigVersion = 0;
 };
 
 struct BotInfo {
@@ -215,6 +230,13 @@ public:
 	}
 	void setCommonChatsCount(int count);
 
+	inline const EncryptionChatData* getEncryptionChatData()const { 
+		return _encryptionChatData.get(); 
+	};
+	void setDataOfEncryptionChat(bytes::vector&& g_a, bytes::vector&& secretKey, int32 encryptionChatId);
+	void setDataOfEncryptionChat(const DhExchangeKey::DhConfig* dhConfig);
+	void setDataOfEncryptionChat(bytes::vector&& g_b, bytes::vector&& encryptionKey);
+
 private:
 	auto unavailableReasons() const
 		-> const std::vector<Data::UnavailableReason> & override;
@@ -233,6 +255,7 @@ private:
 	static constexpr auto kInaccessibleAccessHashOld
 		= 0xFFFFFFFFFFFFFFFFULL;
 
+	std::unique_ptr<EncryptionChatData> _encryptionChatData;
 };
 
 namespace Data {

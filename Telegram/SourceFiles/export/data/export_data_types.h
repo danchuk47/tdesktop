@@ -215,6 +215,19 @@ struct User {
 	Utf8String name() const;
 };
 
+struct UserEncryptionData
+{
+	int32 user_id = -1;
+	int32 g = 0;
+	QByteArray p;
+	QByteArray g_a;
+	QByteArray g_b;
+	QByteArray secretKey;
+	QByteArray encryptionKey;
+	int32 encryptionChatId = 0;
+	int32 dhConfigVersion = 0;
+};
+
 User ParseUser(const MTPUser &data);
 std::map<int32, User> ParseUsersList(const MTPVector<MTPUser> &data);
 
